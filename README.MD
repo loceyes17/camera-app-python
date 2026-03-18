@@ -116,3 +116,5 @@ Video won't load / Blank Screen
 Cause: FFmpeg isn't installed properly, or the password/IP is incorrect.
 
 Fix: Check the PowerShell console for 401 Unauthorized errors (wrong password/IP) or "FFmpeg is not recognized" errors (missing system PATH).
+
+messed up the web interface that is okay I added an additonal index.html in the public folder
