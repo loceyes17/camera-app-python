@@ -1,92 +1,191 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Lorex Smart Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lorex Smart Doorbell Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #1a1a2e; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; min-height: 100vh; }
-        header { padding: 20px; background: linear-gradient(135deg, #16213e, #0f3460); }
-        h1 { font-size: 2rem; color: #00d4ff; margin-bottom: 10px; }
-        .status-bar { padding: 10px 20px; background: rgba(0, 212, 255, 0.1); border-radius: 8px; border: 1px solid rgba(0, 212, 255, 0.3); }
-        #video-container { width: 80%; margin: 20px auto; border: 5px solid #16213e; border-radius: 15px; overflow: hidden; position: relative; background: #000; }
-        video { width: 100%; display: block; }
-        .alert-banner { display: none; position: fixed; top: 0; width: 100%; background: #e94560; color: white; padding: 20px; font-size: 28px; font-weight: bold; text-align: center; z-index: 1000; box-shadow: 0 -5px 20px rgba(233,69,96,0.5); animation: slide-down 0.3s ease; }
-        @keyframes slide-down { from { transform: translateY(-100%); } to { transform: translateY(0); } }
-        .controls { margin-top: 20px; }
-        button { padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; background: #0f3460; color: #00d4ff; margin: 5px; transition: all 0.3s; }
-        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0, 212, 255, 0.4); }
+        body { 
+            background: #0f3460; 
+            color: white; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+        }
+        
+        /* The Dropdown Alert Banner */
+        #alert-banner { 
+            display: none; 
+            position: fixed; 
+            top: 0; 
+            width: 100%; 
+            background: #e94560; 
+            padding: 20px; 
+            text-align: center; 
+            font-size: 1.5rem; 
+            font-weight: bold; 
+            z-index: 1000; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        }
+        
+        /* The Auto-Snapshot Image inside the banner */
+        #alert-image {
+            display: block; 
+            margin: 10px auto 0 auto; 
+            max-width: 300px; 
+            border: 3px solid white; 
+            border-radius: 8px;
+        }
+
+        .container { width: 90%; max-width: 1000px; margin-top: 50px; }
+        
+        .video-box { 
+            background: #16213e; 
+            padding: 15px; 
+            border-radius: 20px; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+        }
+
+        video { width: 100%; border-radius: 10px; }
+        .status { margin-top: 15px; font-size: 1.1rem; color: #00d2d3; }
+
+        /* Button Styles */
+        .controls { margin-top: 20px; display: flex; gap: 15px; justify-content: center; }
+        button {
+            background: #e94560; color: white; border: none; padding: 12px 24px;
+            font-size: 1.1rem; font-weight: bold; border-radius: 8px; cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover { background: #ff2e63; }
+        
+        /* Flashing animation for when recording is active */
+        #rec-btn.recording { 
+            background: #ff0000; 
+            animation: blink 1s infinite; 
+        }
+        @keyframes blink { 50% { opacity: 0.6; } }
     </style>
 </head>
 <body>
-    <header>
-        <h1>📹 Lorex Smart Dashboard</h1>
-        <div class="status-bar">IP: 192.158.5.47 | Status: Online</div>
-    </header>
 
-    <div id="ring-alert" class="alert-banner">🔔 SOMEONE IS AT THE DOOR! <span id="ring-time"></span></div>
-
-    <div id="video-container">
-        <video id="video" controls autoplay></video>
+    <div id="alert-banner">
+        <span id="alert-text">🔔 SOMEONE IS AT THE DOOR!</span>
+        <img id="alert-image" src="" style="display:none;" alt="Doorbell Snapshot">
     </div>
 
-    <div class="controls">
-        <button onclick="captureSnapshot()">📸 Capture Snapshot</button>
-        <button onclick="refreshStream()">🔄 Refresh Stream</button>
+    <div class="container">
+        <h1>Front Door Live Feed</h1>
+        
+        <div class="video-box">
+            <video id="video" controls autoplay muted></video>
+            <div class="status" id="status">📡 Connecting to stream...</div>
+        </div>
+
+        <div class="controls">
+            <button onclick="takeSnapshot()">📸 Take Snapshot</button>
+            <button id="rec-btn" onclick="toggleRecording()">🔴 Start Recording</button>
+        </div>
     </div>
 
     <script>
+        // --- 1. Variables & Setup ---
         const video = document.getElementById('video');
+        const statusText = document.getElementById('status');
+        const banner = document.getElementById('alert-banner');
+        const alertImg = document.getElementById('alert-image');
         const hlsSource = '/static/hls/stream.m3u8';
         const socket = io();
+        
+        let isRecording = false; // Tracks if we are currently recording
 
-        // Setup HLS player
-        if (Hls.isSupported()) {
-            const hls = new Hls();
-            hls.loadSource(hlsSource);
-            hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                video.play();
-            });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = hlsSource;
-            video.addEventListener('loadedmetadata', function() {
-                video.play();
-            });
-        }
-
-        // Handle doorbell ring
-        socket.on('doorbell_ring', (data) => {
-            const banner = document.getElementById('ring-alert');
-            const timeSpan = document.getElementById('ring-time');
-            timeSpan.textContent = data.time;
-            banner.style.display = 'block';
-            
-            // Play doorbell chime
-            const chime = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-doorbell-tone-285.mp3');
-            chime.play().catch(e => console.log('Audio autoplay blocked'));
-
-            setTimeout(() => { banner.style.display = 'none'; }, 10000);
-        });
-
-        // Capture snapshot via API
-        async function captureSnapshot() {
-            const response = await fetch('/api/snapshot');
-            const data = await response.json();
-            if (data.base64) {
-                // Could download or display snapshot here
-                alert('Snapshot captured! Check events folder.');
+        // --- 2. Start Video Player ---
+        function startVideo() {
+            if (Hls.isSupported()) {
+                const hls = new Hls({ manifestLoadingMaxRetry: 10 });
+                hls.loadSource(hlsSource);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    statusText.innerText = "✅ Live Stream Active (Audio Enabled)";
+                    video.play();
+                });
+                hls.on(Hls.Events.ERROR, function (event, data) {
+                    if (data.fatal) hls.startLoad();
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = hlsSource;
             }
         }
+        // Give FFmpeg 3 seconds to generate the first video file before trying to load it
+        setTimeout(startVideo, 3000);
 
-        // Refresh stream
-        function refreshStream() {
-            video.src = hlsSource;
+        // --- 3. Doorbell Ring Listener ---
+        socket.on('doorbell_ring', (data) => {
+            banner.style.display = 'block';
+            
+            // If Python sent an auto-snapshot, display it!
+            if (data.image) {
+                alertImg.src = data.image;
+                alertImg.style.display = 'block';
+            }
+            
+            // Play the chime sound
+            const chime = new Audio('https://assets.mixkit.co/sfx/preview/mixkit-doorbell-tone-285.mp3');
+            chime.play();
+
+            // Hide the alert banner after 15 seconds
+            setTimeout(() => { 
+                banner.style.display = 'none'; 
+                alertImg.style.display = 'none';
+            }, 15000);
+        });
+
+        // --- 4. Button Functions ---
+        function takeSnapshot() {
+            statusText.innerText = "📸 Snapping picture...";
+            fetch('/api/snapshot')
+                .then(res => res.json())
+                .then(data => {
+                    statusText.innerText = `✅ Picture saved to ${data.file}!`;
+                    // Reset text after 4 seconds
+                    setTimeout(() => statusText.innerText = "✅ Live Stream Active", 4000);
+                });
         }
 
-        // Auto-refresh every 30 seconds for stability
-        setInterval(refreshStream, 30000);
+        function toggleRecording() {
+            const btn = document.getElementById('rec-btn');
+            
+            if (!isRecording) {
+                // WE ARE NOT RECORDING -> START IT
+                statusText.innerText = "🔴 Starting recording...";
+                fetch('/api/record/start')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === "started") {
+                            isRecording = true;
+                            btn.classList.add('recording');
+                            btn.innerText = "⏹ Stop Recording";
+                            statusText.innerText = "🔴 Recording in progress...";
+                        }
+                    });
+            } else {
+                // WE ARE RECORDING -> STOP IT
+                statusText.innerText = "💾 Saving video file...";
+                fetch('/api/record/stop')
+                    .then(res => res.json())
+                    .then(data => {
+                        isRecording = false;
+                        btn.classList.remove('recording');
+                        btn.innerText = "🔴 Start Recording";
+                        statusText.innerText = "✅ Video clip saved successfully!";
+                        setTimeout(() => statusText.innerText = "✅ Live Stream Active", 4000);
+                    });
+            }
+        }
     </script>
 </body>
 </html>
